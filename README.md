@@ -51,12 +51,28 @@ Happy training!
 | fp16 Embed | 1.2197 | Renier Velazco | FP16 Tied Embedding + LR/Warmdown Tuning | 2026-03-18 | [info](records/track_10min_16mb/2026-03-18_FP16Embed_WD3600/README.md) |
 | Naive Baseline | 1.2244 | Baseline | 9layer 512dim 1024vocab TiedEmbeddings 4 KV heads | 2026-03-18 | [info](records/track_10min_16mb/2026-03-17_NaiveBaseline/README.md) |
 
-#### Notable Non-Record Runs
+#### Unlimited Compute Leaderboard & Non-record Submissions
 
 | Run | Score | Author | Summary | Date | Info |
 |-----|------:|--------|---------|------|------|
 | 1 Bit Quantization | 1.1239 | Ciprian-Florin Ifrim | 106M params quantized to 1 bit + misc arch changes + 2hr training | 2026-03-24 | [info](records/track_non_record_16mb/2026-03-24_106M_Binary_Asymmetric_UNet_FP8_15L_8192BPE_YaRN_NeoMuon_Smear/README.md) |
 | 4-Hour Baseline | 1.2074 | Will DePue | Testing unlimited compute, 4 hours on 8xH100 | 2026-03-18 | [info](records/track_non_record_16mb/2026-03-18_Quasi10Bfrom50B_SP1024_9x512_KV4_4h_pgut3/README.md) |
+
+#### Requests for PRs
+
+Breakthrough ideas are rarely immediately state-of-the-art, instead, they're developed slowly, first demonstrating signs-of-life, iterated on, then only ultimately optimized on the systems side. Don't get discouraged if a new algorithm doesn't instantly beat the best leaderboard run or even the naive baseline. We recommend first ignoring step times and systems cost, since those can often be optimized after the fact, and using the same number of steps as your baseline without looking at the time. Once you prove you can beat the baseline with the method you can then start focusing on how to also make it fast.
+
+We'd love to see weird & creative ideas in the challenge, since you never know what may end up working. Most likely, these will be a good fit in our unlimited compute leaderboard as non-record submissions. We have some requests for what we'd love to see people implement:
+
+- [x] 1-bit quantization - [implementation](records/track_non_record_16mb/2026-03-24_106M_Binary_Asymmetric_UNet_FP8_15L_8192BPE_YaRN_NeoMuon_Smear/README.md)
+- [x] Ternary quantization - [implementation](records/track_10min_16mb/2026-03-24_74M_Ternary_UNet_FP8_10L_8192BPE_YaRN_NeoMuon/README.md)
+- [ ] JEPA
+- [ ] Text diffusion
+- [ ] H-net tokenization
+- [ ] Universal transformer - [We have lots of depth recurrence submissions, but I'd love to see one 4 hour
+- [ ] Megakernels
+- [ ] State-space models, E2E TTT, super long context for evaluation or training 
+- [ ] Learning adapters on random linear maps
 
 ## Getting Started
 
