@@ -51,6 +51,7 @@ class RunSpec:
     full_validation: bool = False
     val_slice_seqs: int = 512
     config_diff: dict[str, Any] = field(default_factory=dict)
+    arg_overrides: dict[str, Any] = field(default_factory=dict)
 
 
 def parse_args() -> argparse.Namespace:
@@ -78,7 +79,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--matrix",
-        choices=("dry1", "primary64-fullval", "extended32-sliceval", "schedule128-fullval", "lmfirst-fullval"),
+        choices=(
+            "dry1",
+            "primary64-fullval",
+            "extended32-sliceval",
+            "schedule128-fullval",
+            "lmfirst-fullval",
+            "claude32-sliceval",
+            "claude-fullval",
+        ),
         default="dry1",
     )
     parser.add_argument("--single", default="")
@@ -348,6 +357,28 @@ def set_single_aux_zero(args, key: str) -> dict[str, float]:
     old = {key: float(getattr(args, key))}
     setattr(args, key, 0.0)
     return old
+
+
+def resolve_arg_override(args, value: Any) -> Any:
+    if isinstance(value, str) and value.startswith("$"):
+        attr = value[1:]
+        if not hasattr(args, attr):
+            raise ValueError(f"Unknown arg reference override: {value}")
+        return getattr(args, attr)
+    return value
+
+
+def apply_arg_overrides(args, overrides: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    original: dict[str, Any] = {}
+    resolved: dict[str, Any] = {}
+    for key, value in overrides.items():
+        if not hasattr(args, key):
+            raise ValueError(f"RunSpec override references unknown Hyperparameters field: {key}")
+        original[key] = getattr(args, key)
+        resolved_value = resolve_arg_override(args, value)
+        setattr(args, key, resolved_value)
+        resolved[key] = resolved_value
+    return original, resolved
 
 
 def support_total(trace, temp_pool, args, lm_only: bool) -> Tensor:
@@ -1042,6 +1073,13 @@ def make_specs(matrix: str, single: str, val_slice_seqs: int) -> list[RunSpec]:
             full_validation=True,
             config_diff={"pretrain_episodes": 256, "iterations": 256},
         ),
+        "pure_pretrain384": RunSpec(
+            run_id="pure_pretrain384",
+            iterations=384,
+            pretrain_episodes=384,
+            full_validation=True,
+            config_diff={"pretrain_episodes": 384, "iterations": 384},
+        ),
         "pure_pretrain512": RunSpec(
             run_id="pure_pretrain512",
             iterations=512,
@@ -1063,6 +1101,41 @@ def make_specs(matrix: str, single: str, val_slice_seqs: int) -> list[RunSpec]:
                 "outer_loss": "query_lm_loss_plus_0.05_aux",
                 "episodic_trainable": "base_and_outer",
             },
+        ),
+        "pure_pretrain256_then_lm_only_ep128_lrmatch": RunSpec(
+            run_id="pure_pretrain256_then_lm_only_ep128_lrmatch",
+            iterations=384,
+            pretrain_episodes=256,
+            episodic_objective="lm_only",
+            support_lm_only=True,
+            episodic_trainable="base_and_outer",
+            full_validation=True,
+            config_diff={
+                "pretrain_episodes": 256,
+                "episodic_steps": 128,
+                "outer_loss": "query_lm_loss",
+                "episodic_trainable": "base_and_outer",
+                "outer_lr": "$stable_lr",
+            },
+            arg_overrides={"outer_lr": "$stable_lr"},
+        ),
+        "pure_pretrain256_then_lm_dominant_ep128_anchor0_lrmatch": RunSpec(
+            run_id="pure_pretrain256_then_lm_dominant_ep128_anchor0_lrmatch",
+            iterations=384,
+            pretrain_episodes=256,
+            episodic_objective="lm_dominant",
+            support_lm_only=True,
+            episodic_trainable="base_and_outer",
+            full_validation=True,
+            config_diff={
+                "pretrain_episodes": 256,
+                "episodic_steps": 128,
+                "outer_loss": "query_lm_loss_plus_0.05_aux",
+                "episodic_trainable": "base_and_outer",
+                "lambda_anchor": 0.0,
+                "outer_lr": "$stable_lr",
+            },
+            arg_overrides={"lambda_anchor": 0.0, "outer_lr": "$stable_lr"},
         ),
         "pure_pretrain256_then_full_aux_episodic128": RunSpec(
             run_id="pure_pretrain256_then_full_aux_episodic128",
@@ -1098,6 +1171,116 @@ def make_specs(matrix: str, single: str, val_slice_seqs: int) -> list[RunSpec]:
             config_diff={"matrix": "extended32", "pretrain_trainable": trainable},
         )
         extended_names.append(run_id)
+
+    claude32_names = []
+    claude32_specs = [
+        RunSpec(
+            run_id="claude32_pure_pretrain",
+            iterations=32,
+            pretrain_episodes=32,
+            full_validation=False,
+            val_slice_seqs=val_slice_seqs,
+            config_diff={"matrix": "claude32", "pretrain_episodes": 32, "iterations": 32},
+        ),
+        RunSpec(
+            run_id="claude32_lm_dominant_default",
+            iterations=32,
+            pretrain_episodes=8,
+            episodic_objective="lm_dominant",
+            support_lm_only=True,
+            episodic_trainable="base_and_outer",
+            full_validation=False,
+            val_slice_seqs=val_slice_seqs,
+            config_diff={"matrix": "claude32", "pretrain_episodes": 8, "episodic_steps": 24, "outer_loss": "query_lm_loss_plus_0.05_aux"},
+        ),
+        RunSpec(
+            run_id="claude32_lm_only_lrmatch",
+            iterations=32,
+            pretrain_episodes=8,
+            episodic_objective="lm_only",
+            support_lm_only=True,
+            episodic_trainable="base_and_outer",
+            full_validation=False,
+            val_slice_seqs=val_slice_seqs,
+            config_diff={"matrix": "claude32", "outer_loss": "query_lm_loss", "outer_lr": "$stable_lr"},
+            arg_overrides={"outer_lr": "$stable_lr"},
+        ),
+        RunSpec(
+            run_id="claude32_anchor0",
+            iterations=32,
+            pretrain_episodes=8,
+            episodic_objective="lm_dominant",
+            support_lm_only=True,
+            episodic_trainable="base_and_outer",
+            full_validation=False,
+            val_slice_seqs=val_slice_seqs,
+            config_diff={"matrix": "claude32", "lambda_anchor": 0.0},
+            arg_overrides={"lambda_anchor": 0.0},
+        ),
+        RunSpec(
+            run_id="claude32_lrmatch",
+            iterations=32,
+            pretrain_episodes=8,
+            episodic_objective="lm_dominant",
+            support_lm_only=True,
+            episodic_trainable="base_and_outer",
+            full_validation=False,
+            val_slice_seqs=val_slice_seqs,
+            config_diff={"matrix": "claude32", "outer_lr": "$stable_lr"},
+            arg_overrides={"outer_lr": "$stable_lr"},
+        ),
+        RunSpec(
+            run_id="claude32_anchor0_lrmatch",
+            iterations=32,
+            pretrain_episodes=8,
+            episodic_objective="lm_dominant",
+            support_lm_only=True,
+            episodic_trainable="base_and_outer",
+            full_validation=False,
+            val_slice_seqs=val_slice_seqs,
+            config_diff={"matrix": "claude32", "lambda_anchor": 0.0, "outer_lr": "$stable_lr"},
+            arg_overrides={"lambda_anchor": 0.0, "outer_lr": "$stable_lr"},
+        ),
+        RunSpec(
+            run_id="claude32_huber_wide",
+            iterations=32,
+            pretrain_episodes=8,
+            episodic_objective="lm_dominant",
+            support_lm_only=True,
+            episodic_trainable="base_and_outer",
+            full_validation=False,
+            val_slice_seqs=val_slice_seqs,
+            config_diff={"matrix": "claude32", "rebus_huber_m": 8.0},
+            arg_overrides={"rebus_huber_m": 8.0},
+        ),
+        RunSpec(
+            run_id="claude32_huber_off",
+            iterations=32,
+            pretrain_episodes=8,
+            episodic_objective="lm_dominant",
+            support_lm_only=True,
+            episodic_trainable="base_and_outer",
+            full_validation=False,
+            val_slice_seqs=val_slice_seqs,
+            config_diff={"matrix": "claude32", "rebus_use_huber_attribution": False},
+            arg_overrides={"rebus_use_huber_attribution": False},
+        ),
+        RunSpec(
+            run_id="claude32_supervisor_off",
+            iterations=32,
+            pretrain_episodes=8,
+            episodic_objective="lm_dominant",
+            support_lm_only=True,
+            episodic_trainable="base_and_outer",
+            full_validation=False,
+            val_slice_seqs=val_slice_seqs,
+            config_diff={"matrix": "claude32", "rebus_supervisor_enabled": False},
+            arg_overrides={"rebus_supervisor_enabled": False},
+        ),
+    ]
+    for spec in claude32_specs:
+        specs[spec.run_id] = spec
+        claude32_names.append(spec.run_id)
     for run_id, objective, trainable in [
         ("ext32_episodic_lm_only_outer", "lm_only", "outer_only"),
         ("ext32_episodic_full_aux_outer", "full_aux", "outer_only"),
@@ -1161,6 +1344,20 @@ def make_specs(matrix: str, single: str, val_slice_seqs: int) -> list[RunSpec]:
                 "pure_pretrain256_then_full_aux_episodic128",
             ]
         ]
+    if matrix == "claude32-sliceval":
+        return [specs[name] for name in claude32_names]
+    if matrix == "claude-fullval":
+        return [
+            specs[name]
+            for name in [
+                "pure_pretrain256",
+                "pure_pretrain384",
+                "pure_pretrain512",
+                "pure_pretrain256_then_lm_only_ep128_lrmatch",
+                "pure_pretrain256_then_lm_dominant_episodic128",
+                "pure_pretrain256_then_lm_dominant_ep128_anchor0_lrmatch",
+            ]
+        ]
     raise ValueError(f"Unsupported matrix: {matrix}")
 
 
@@ -1190,8 +1387,11 @@ def run_training_spec(
     if spec.aux_zero:
         aux_old.update(apply_aux_zero(args))
     for key, value in spec.config_diff.items():
+        if key in spec.arg_overrides:
+            continue
         if key.startswith("lambda_") and hasattr(args, key):
             aux_old.update(set_single_aux_zero(args, key))
+    original_arg_values, resolved_arg_overrides = apply_arg_overrides(args, spec.arg_overrides)
 
     model = make_model(mod, args, device)
     model.train()
@@ -1450,6 +1650,8 @@ def run_training_spec(
         "community_snapshot_path": str(community_snapshot_path) if community_snapshot_path is not None else None,
         "community_metrics": community_snapshot["metrics"] if community_snapshot is not None else None,
         "aux_original_values": aux_old,
+        "original_arg_values": original_arg_values,
+        "resolved_arg_overrides": resolved_arg_overrides,
         "final_supervisor": {
             "mode": ("CLOSED", "GROW", "RECOVER")[int(model.supervisor_mode.item())],
             "mode_counts": [int(value) for value in model.supervisor_mode_counts.detach().cpu().tolist()],
@@ -1477,13 +1679,18 @@ def run_training_spec(
 
 def print_summary_table(summaries: list[dict[str, Any]]) -> None:
     print("")
-    print("| run_id | train_lm_ce | train_total | reported_scope | reported_bpb | full_eval_bpb | label_free_probe_bpb | beats_baseline | top_update_bucket | eval_mutations | seconds |")
-    print("| --- | ---: | ---: | --- | ---: | ---: | ---: | --- | --- | ---: | ---: |")
+    print("| run_id | train_lm_ce | train_total | reported_scope | reported_bpb | full_eval_bpb | label_free_probe_bpb | mode_counts | growth | top_update_bucket | eval_mutations | seconds | config_diff |")
+    print("| --- | ---: | ---: | --- | ---: | ---: | ---: | --- | ---: | --- | ---: | ---: | --- |")
     for summary in summaries:
         objective = summary["last_objective"]
         validation = summary["validation"]
         bucket_stats = summary["last_update_stats"]
         top_bucket = max(bucket_stats.items(), key=lambda item: float(item[1].get("update_to_param", 0.0)))[0] if bucket_stats else "none"
+        supervisor = summary.get("final_supervisor", {})
+        config = dict(summary.get("spec", {}).get("config_diff", {}))
+        if summary.get("resolved_arg_overrides"):
+            config["resolved_arg_overrides"] = summary["resolved_arg_overrides"]
+        config_text = json.dumps(config, sort_keys=True, separators=(",", ":"))
         print(
             f"| {summary['run_id']} "
             f"| {float(objective.get('lm_ce') or float('nan')):.4f} "
@@ -1492,10 +1699,12 @@ def print_summary_table(summaries: list[dict[str, Any]]) -> None:
             f"| {validation['reported_eval_bpb']:.4f} "
             f"| {validation['current_eval_bpb']:.4f} "
             f"| {validation['label_free_probe_bpb']:.4f} "
-            f"| {validation['beats_promotion_baseline']} "
+            f"| {supervisor.get('mode_counts', [])} "
+            f"| {supervisor.get('growth_events', 0)} "
             f"| {top_bucket} "
             f"| {validation['reported_eval_buffer_mutation']['changed_count']} "
-            f"| {summary['train_seconds']:.1f} |"
+            f"| {summary['train_seconds']:.1f} "
+            f"| `{config_text}` |"
         )
 
 
