@@ -3340,6 +3340,10 @@ def build_optimizer(params: list[nn.Parameter], args: Hyperparameters, lr: float
     )
 
 
+def optimizer_parameters(optimizer: torch.optim.Optimizer) -> list[nn.Parameter]:
+    return [param for group in optimizer.param_groups for param in group["params"]]
+
+
 def build_support_debug_record(
     episode_idx: int,
     support_idx: int,
@@ -4447,6 +4451,10 @@ def run_self_tests() -> None:
     assert len(trainability_model.episodic_parameters()) > len(trainability_model.outer_parameters()), (
         "base_and_outer optimizer set should include more than the legacy outer-only params"
     )
+    test_optimizer = torch.optim.SGD(trainability_model.episodic_parameters(), lr=0.1)
+    assert {id(param) for param in optimizer_parameters(test_optimizer)} == {
+        id(param) for param in trainability_model.episodic_parameters()
+    }, "gradient clipping should cover the same episodic params as the optimizer"
 
     # 8. test_eval_snapshot_restore: eval-time runtime mutations can be restored exactly
     snapshot_model = PsyArborLM(Hyperparameters()).to(device)
@@ -4727,7 +4735,7 @@ def main() -> None:
             loss = torch.stack(loss_terms).mean()
             loss.backward()
             if args.grad_clip_norm > 0:
-                torch.nn.utils.clip_grad_norm_(base_model.pretrain_parameters(), args.grad_clip_norm)
+                torch.nn.utils.clip_grad_norm_(optimizer_parameters(pretrain_optimizer), args.grad_clip_norm)
             pretrain_optimizer.step()
             train_metrics = {
                 "phase": "pretrain",
@@ -4834,7 +4842,7 @@ def main() -> None:
                 outer_loss = lm_weight * query_lm_loss + episodic_weight * episodic_regularizer
             outer_loss.backward()
             if args.grad_clip_norm > 0:
-                torch.nn.utils.clip_grad_norm_(base_model.outer_parameters(), args.grad_clip_norm)
+                torch.nn.utils.clip_grad_norm_(optimizer_parameters(outer_optimizer), args.grad_clip_norm)
             outer_optimizer.step()
             base_model.update_query_ema(query_lm_loss.detach())
             for query_trace in query_traces:
