@@ -1,0 +1,56 @@
+{
+  "author": "jjor3",
+  "github_id": "jjor3",
+  "name": "AR Self-Gen GPTQ + AR Temp Scale + Output-Side N-gram Tilt (draft)",
+  "blurb": "Draft candidate forked from the 2026-03-25 top legal record. Replaces the previous input-side TRIGRAM hash (Zipf chi² collision risk) with a Nacrith-style output-side interpolated 1..K-gram tilt with lambda_k backoff, applied as a closed-form NLL correction during val eval. Keeps AR self-gen GPTQ and AR self-gen eval-temperature search. Causal-compliant (C1-C4). Metrics pending rerun on 8xH100 SXM.",
+  "date": "2026-05-02",
+  "track": "non-record-16mb",
+  "status": "draft_candidate_unrun",
+  "val_loss": null,
+  "val_bpb": null,
+  "val_loss_std": null,
+  "val_bpb_std": null,
+  "seeds": [],
+  "seed_results": {},
+  "artifact_bytes_mean": null,
+  "artifact_bytes_max": null,
+  "bytes_total": null,
+  "hardware": "8xH100 80GB SXM (pending rerun)",
+  "pytorch_version": "2.9.1+cu128",
+  "cuda_version": "12.8",
+  "calibration": "AR self-generated GPTQ calibration + AR self-generated eval-temperature calibration",
+  "technique_summary": "AR self-gen GPTQ + AR self-gen eval-temperature search + output-side Nacrith interpolated n-gram tilt (orders 1..K, lambda_k backoff, closed-form NLL correction during eval)",
+  "lineage": {
+    "parent_record": "records/track_10min_16mb/2026-03-25_ValCalib_GPTQ_XSA_BigramHash3072",
+    "parent_val_bpb": 1.1147,
+    "current_sota_bpb_unmerged": 1.05601,
+    "current_sota_pr": 2140,
+    "rebase_required_to_compete": true
+  },
+  "novelties": [
+    {
+      "name": "ar_eval_temp_search",
+      "kind": "post_train_calibration",
+      "description": "Self-generated autoregressive token grid search over per-eval temperature.",
+      "expected_delta_nats": "near-zero (model is calibrated to its own samples)"
+    },
+    {
+      "name": "output_side_ngram_tilt",
+      "kind": "eval_time_posterior_correction",
+      "description": "Interpolated 1..K-gram count predictor (Nacrith eq. 6-7) producing one hint h_t per scored val position. Closed-form tilt p'(a) = p(a) * exp(beta * 1[a==h_t]) / Z_t applied to model NLL when n-gram confidence p_hat >= NGRAM_TILT_THRESHOLD.",
+      "expected_delta_nats": "0 to +0.005 (vocab=1024, K=3, eps=5, threshold=0.5)"
+    }
+  ],
+  "compliance": {
+    "C1_causal": true,
+    "C2_normalized": true,
+    "C3_score_before_update": true,
+    "C4_single_pass": true,
+    "no_paid_prefix_tricks": true,
+    "no_validation_data_during_training": true
+  },
+  "removed_from_prior_draft": [
+    "BigramHashEmbedding.trigram_hash (input-side hash trigram blending) — chi² 78k Zipf collision risk per the parent draft's own analysis",
+    "TRIGRAM and TRIGRAM_ALPHA env vars"
+  ]
+}
