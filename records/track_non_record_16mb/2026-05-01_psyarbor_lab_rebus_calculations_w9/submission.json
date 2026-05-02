@@ -1,0 +1,22 @@
+{
+  "author": "",
+  "github_id": "",
+  "name": "PsyArbor W9 REBUS Calculations",
+  "blurb": "Behavior-first W9 lab branch built from W8: ports five NumPy-only rebus-lab primitives (log-det-cov dispersion entropy, pinball-loss online quantile thresholds, Huber-clipped per-assembly error attribution, moving-block bootstrap CIs, pinball-loss kappa envelope) and wires four of them into the W8 supervisor while preserving the kill-switch parity contract.",
+  "date": "2026-05-01T00:00:00Z",
+  "track": "non-record-16mb",
+  "status": "implementation_complete_initial_smoke_pending",
+  "record_intent": false,
+  "val_loss": null,
+  "val_bpb": null,
+  "pre_quant_val_loss": null,
+  "pre_quant_val_bpb": null,
+  "step_stop": 0,
+  "wallclock_seconds": 0,
+  "eval_time_seconds": 0,
+  "bytes_total": null,
+  "bytes_model_int8_zlib": null,
+  "bytes_code": null,
+  "gpu": null,
+  "notes": "W9 layers principled-signal-estimation calculations from rebus-lab on top of W8's supervisor (mode FSM, sparse routing, health, clone-and-perturb). All ports are NumPy-only with no cvxpy import. Each new feature has a dedicated kill switch so users can ablate any subset back to W8 v1.1 behavior. Validation is pending for the integrated pipeline at the 16/64 budget."
+}
