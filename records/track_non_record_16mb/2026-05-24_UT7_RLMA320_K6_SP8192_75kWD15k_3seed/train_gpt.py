@@ -114,6 +114,14 @@ class Hyperparameters:
     embed_quant_bits = int(os.environ.get("EMBED_QUANT_BITS", 8))
     zstd_level = int(os.environ.get("ZSTD_LEVEL", 22))
     target_artifact_bytes = int(os.environ.get("TARGET_ARTIFACT_BYTES", 14_000_000))
+    train_only = bool(int(os.environ.get("TRAIN_ONLY", "0")))
+    quant_only = bool(int(os.environ.get("QUANT_ONLY", "0")))
+    save_fp_checkpoint_every = int(os.environ.get("SAVE_FP_CHECKPOINT_EVERY", "0"))
+    fp_checkpoint_dir = os.environ.get("FP_CHECKPOINT_DIR", "checkpoints")
+    fp_final_path = os.environ.get("FP_FINAL_PATH", "")
+    load_fp_checkpoint = os.environ.get("LOAD_FP_CHECKPOINT", "")
+    save_quant_sweep_artifacts = bool(int(os.environ.get("SAVE_QUANT_SWEEP_ARTIFACTS", "0")))
+    quant_sweep_csv = os.environ.get("QUANT_SWEEP_CSV", "")
 
 
 # -----------------------------
@@ -1003,6 +1011,22 @@ def decompress_blob(buf: bytes) -> bytes:
     return _zlib.decompress(buf)
 
 
+def cpu_state_dict(model: nn.Module) -> dict[str, Tensor]:
+    return {k: v.detach().to("cpu").contiguous() for k, v in model.state_dict().items()}
+
+
+def atomic_torch_save(obj: object, path: str | Path) -> None:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    torch.save(obj, tmp)
+    os.replace(tmp, path)
+
+
+def safe_name(x: float) -> str:
+    return f"{x:g}".replace("-", "m").replace(".", "p")
+
+
 @torch.no_grad()
 def ar_self_generate_calibration(
     model: nn.Module,
@@ -1027,6 +1051,8 @@ def ar_self_generate_calibration(
 def main() -> None:
     code = Path(__file__).read_text(encoding="utf-8")
     args = Hyperparameters()
+    if args.quant_only:
+        args.iterations = 0
 
     distributed = "RANK" in os.environ and "WORLD_SIZE" in os.environ
     rank = int(os.environ.get("RANK", "0"))
@@ -1128,6 +1154,9 @@ def main() -> None:
         if p.ndim < 2 or any(s in n for s in ("alpha", "log_eta", "depth_emb",
                                               "attn_scale", "mlp_scale", "q_gain", "tok_emb", "step_gates")):
             p.data = p.data.float()
+    if args.load_fp_checkpoint:
+        ckpt = torch.load(args.load_fp_checkpoint, map_location="cpu")
+        base_model.load_state_dict(ckpt, strict=True)
 
     if distributed:
         model: nn.Module = DDP(base_model, device_ids=[local_rank], broadcast_buffers=False)
@@ -1174,6 +1203,8 @@ def main() -> None:
         f"embed={sum(p.numel() for p in embed_params)}"
     )
     log0(f"residual_scale:{base_model._residual_scale:.5f}")
+    if args.load_fp_checkpoint:
+        log0(f"loaded_fp_checkpoint:{args.load_fp_checkpoint}")
 
     train_loader = DistributedTokenLoader(args.train_files, rank, world_size, device)
 
@@ -1290,6 +1321,12 @@ def main() -> None:
                 f"lr_scale:{scale:.3f} muon_mom:{muon_mom:.3f} "
                 f"train_time:{approx_ms:.0f}ms step_avg:{approx_ms / step:.2f}ms"
             )
+        if master and args.save_fp_checkpoint_every > 0 and step % args.save_fp_checkpoint_every == 0:
+            ckpt_path = Path(args.fp_checkpoint_dir) / f"fp_step_{step:06d}.pt"
+            atomic_torch_save(cpu_state_dict(base_model), ckpt_path)
+            log0(f"fp_checkpoint_saved step:{step} path:{ckpt_path} bytes:{ckpt_path.stat().st_size}")
+        if distributed and args.save_fp_checkpoint_every > 0 and step % args.save_fp_checkpoint_every == 0:
+            dist.barrier()
         reached_cap = max_wallclock_ms is not None and approx_ms >= max_wallclock_ms
         if distributed and max_wallclock_ms is not None:
             t = torch.tensor(int(reached_cap), device=device)
@@ -1302,6 +1339,17 @@ def main() -> None:
         f"peak memory allocated: {torch.cuda.max_memory_allocated() // 1024 // 1024} MiB "
         f"reserved: {torch.cuda.max_memory_reserved() // 1024 // 1024} MiB"
     )
+    state = cpu_state_dict(base_model)
+    if master:
+        final_path = args.fp_final_path or str(Path(args.fp_checkpoint_dir) / f"fp_final_step{step:06d}.pt")
+        atomic_torch_save(state, final_path)
+        log0(f"fp_final_saved step:{step} path:{final_path} bytes:{Path(final_path).stat().st_size}")
+    if distributed:
+        dist.barrier()
+    if args.train_only:
+        if distributed:
+            dist.destroy_process_group()
+        return
 
     # -----------------------------
     # QUANTIZATION + ROUNDTRIP VERIFICATION
@@ -1333,7 +1381,6 @@ def main() -> None:
         )
         log0(f"final_fp_exact val_loss:{fp_val_loss:.8f} val_bpb:{fp_val_bpb:.8f}")
 
-    state = {k: v.detach().to("cpu").contiguous() for k, v in base_model.state_dict().items()}
     quant_obj, qstats = quantize_state_dict(state, args)
     quant_buf = io.BytesIO()
     torch.save(quant_obj, quant_buf)
@@ -1376,6 +1423,10 @@ def main() -> None:
         f"artifact_bytes:{artifact_bytes}"
     )
     log0(f"final_quant_roundtrip_exact val_loss:{q_val_loss:.8f} val_bpb:{q_val_bpb:.8f}")
+    if master and args.quant_sweep_csv:
+        csv_path = Path(args.quant_sweep_csv)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        csv_path.write_text("bits,clip_k,val_loss,val_bpb,compressed_blob_bytes,total,headroom,artifact\n", encoding="utf-8")
 
     for spec in [s.strip() for s in args.quant_sweep_specs.split(",") if s.strip()]:
         try:
@@ -1391,6 +1442,12 @@ def main() -> None:
         torch.save(sweep_obj, sweep_buf)
         sweep_blob = compress_blob(sweep_buf.getvalue(), level=args.zstd_level)
         sweep_total = len(sweep_blob) + code_bytes
+        artifact_name = ""
+        if master and args.save_quant_sweep_artifacts:
+            artifact_name = f"quant_sweep_bits{sweep_args.gptq_bits}_clip{safe_name(sweep_args.gptq_clip_k)}.zst"
+            artifact_path = Path(args.quant_sweep_csv).parent / artifact_name if args.quant_sweep_csv else Path(artifact_name)
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_bytes(sweep_blob)
         sweep_deq = dequantize_state_dict(torch.load(io.BytesIO(decompress_blob(sweep_blob)), map_location="cpu"))
         base_model.load_state_dict(sweep_deq, strict=True)
         torch.cuda.synchronize()
@@ -1411,6 +1468,14 @@ def main() -> None:
             f"val_loss:{sweep_loss:.8f} val_bpb:{sweep_bpb:.8f} "
             f"compressed_blob_bytes:{len(sweep_blob)} total:{sweep_total}"
         )
+        if master and args.quant_sweep_csv:
+            with open(args.quant_sweep_csv, "a", encoding="utf-8") as f:
+                print(
+                    f"{sweep_args.gptq_bits},{sweep_args.gptq_clip_k:g},{sweep_loss:.8f},"
+                    f"{sweep_bpb:.8f},{len(sweep_blob)},{sweep_total},"
+                    f"{args.target_artifact_bytes - sweep_total},{artifact_name}",
+                    file=f,
+                )
 
     if distributed:
         dist.destroy_process_group()
